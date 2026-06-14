@@ -30,7 +30,7 @@ dependencies:
 dependencies:
   bondify_flutter:
     git:
-      url: https://github.com/bondify/bondify-flutter
+      url: https://github.com/bondify-dev/bondify-flutter
       ref: v1.0.0
 ```
 
