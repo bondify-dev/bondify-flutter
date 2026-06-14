@@ -5,11 +5,11 @@ users tap a button, confirm in Telegram, and you get a verified identity.
 
 [![pub package](https://img.shields.io/pub/v/bondify_flutter.svg)](https://pub.dev/packages/bondify_flutter)
 
-- 🔘 Drop-in `BondifyButton` and `showBondifyAuthSheet`
-- 📱 Built for mobile — uses the public, key-less flow (your secret key never ships in the app)
-- 🔒 Returns a signed `proof` (JWT) you verify on your backend
-- 🎨 Themeable (Telegram / dark / light), with built-in loading & success states
-- 🪶 Tiny: only `http` and `url_launcher`
+- Drop-in `BondifyButton` and `showBondifyAuthSheet`
+- Built for mobile — uses the public, key-less flow (your secret key never ships in the app)
+- Returns a signed `proof` (JWT) you verify on your backend
+- Themeable (Telegram / dark / light), with built-in loading & success states
+- Tiny: only `http` and `url_launcher`
 
 ---
 
