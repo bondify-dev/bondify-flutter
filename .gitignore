@@ -1,0 +1,6 @@
+.dart_tool/
+pubspec.lock
+.flutter-plugins-dependencies
+.flutter-plugins
+build/
+*.tgz
