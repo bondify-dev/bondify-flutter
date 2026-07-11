@@ -1,142 +1,96 @@
-# Bondify Flutter SDK
+# bondify_flutter
 
-One-tap **Telegram authentication** for Flutter apps. No SMS, no passwords — your
-users tap a button, confirm in Telegram, and you get a verified identity.
-
-[![pub package](https://img.shields.io/pub/v/bondify_flutter.svg)](https://pub.dev/packages/bondify_flutter)
-
-- Drop-in `BondifyButton` and `showBondifyAuthSheet`
-- Built for mobile — uses the public, key-less flow (your secret key never ships in the app)
-- Returns a signed `proof` (JWT) you verify on your backend
-- Themeable (Telegram / dark / light), with built-in loading & success states
-- Tiny: only `http` and `url_launcher`
-
----
+Flutter SDK for Telegram authentication via Bondify.
 
 ## Installation
 
-Add the package to your `pubspec.yaml`.
-
-**From pub.dev** (once published):
-
 ```yaml
+# pubspec.yaml
 dependencies:
-  bondify_flutter: ^1.0.0
+  bondify_flutter: ^1.0.1
+  url_launcher: ^6.2.4
+  # Optional — for a real QR code:
+  # qr_flutter: ^4.1.0
 ```
-
-**From GitHub** (before it's on pub.dev):
-
-```yaml
-dependencies:
-  bondify_flutter:
-    git:
-      url: https://github.com/bondify-dev/bondify-flutter
-      ref: v1.0.0
-```
-
-Then:
-
-```bash
-flutter pub get
-```
-
-> **Before you start:** open your [Bondify dashboard](https://docs.bondify.dev),
-> copy your **Project ID** (`proj_…`), and enable **Mobile SDK** in the project
-> settings. The mobile flow uses public endpoints that only work when Mobile SDK
-> is on.
-
----
 
 ## Quick start
 
-### 1. The login button
-
 ```dart
+// main.dart
 import 'package:bondify_flutter/bondify_flutter.dart';
 
+void main() {
+  BondifyClient.init(BondifyConfig(
+    projectId: 'proj_xxxxxxxxxxxxxx',
+  ));
+  runApp(MyApp());
+}
+```
+
+## BondifyButton — drop-in button
+
+```dart
 BondifyButton(
-  projectId: 'proj_xxxxxxxx',
-  label: 'Login with Telegram',
-  theme: BondifyTheme.telegram, // telegram | dark | light
+  label: 'Sign in with Telegram',
   onSuccess: (user) {
-    // user.proof is a signed JWT — send it to YOUR backend and verify it.
-    debugPrint('Welcome, ${user.name} (@${user.username})');
+    print('ID: ${user.telegramId}');
+    print('Proof: ${user.proof}');
+    // Send proof to your backend for verification
   },
-  onError: (err) => debugPrint('Login failed: $err'),
 )
 ```
 
-### 2. Or a guided bottom sheet
+## showBondifyAuthSheet — bottom sheet with QR
 
 ```dart
-final user = await showBondifyAuthSheet(context, projectId: 'proj_xxxxxxxx');
-if (user != null) {
-  // signed in
-}
+ElevatedButton(
+  onPressed: () => showBondifyAuthSheet(
+    context,
+    onSuccess: (user) => Navigator.pushNamed(context, '/home'),
+  ),
+  child: const Text('Sign in'),
+)
 ```
 
-### 3. Or drive the flow yourself
+## BondifyStatusBuilder — reactive UI
 
 ```dart
-final client = BondifyClient(const BondifyConfig(projectId: 'proj_xxxxxxxx'));
+BondifyStatusBuilder(
+  builder: (context, state) => switch (state.status) {
+    BondifyAuthStatus.confirmed => HomePage(user: state.user!),
+    BondifyAuthStatus.polling   => LoadingPage(secondsLeft: state.secondsLeft),
+    _                           => LoginPage(),
+  },
+)
+```
 
-try {
-  final user = await client.authenticate(
-    onStatus: (s) => debugPrint('status: $s'),
+## Manual control
+
+```dart
+final client = BondifyClient.instance;
+
+// Start auth and open Telegram
+await client.startAuth();
+if (client.deeplink != null) {
+  await launchUrl(
+    Uri.parse(client.deeplink!),
+    mode: LaunchMode.externalApplication,
   );
-  debugPrint('Signed in as ${user.telegramId}');
-} on BondifyException catch (e) {
-  debugPrint('Auth error: ${e.message}');
 }
+
+// Reset
+client.reset();
 ```
 
-You can also configure a singleton once at startup and omit `projectId` everywhere:
+## Platform setup (Android)
 
-```dart
-void main() {
-  BondifyClient.init(const BondifyConfig(projectId: 'proj_xxxxxxxx'));
-  runApp(const MyApp());
-}
-```
+The package opens the Telegram deep link via `url_launcher` with
+`LaunchMode.externalApplication`. On Android 11+ (API 30+) the system hides
+information about installed packages by default (package visibility) — without
+an explicit `<queries>` declaration, `launchUrl`/`canLaunchUrl` for an external
+app may silently fail.
 
----
-
-## Verify the proof on your backend (required)
-
-The SDK runs on the user's device, so **never trust it alone**. Always send
-`user.proof` to your server and verify it there before creating a session.
-
-`proof` is a JWT signed (HS256) with your project's **webhook secret**
-(`whsec_…`, found in your project settings). Verify it with any JWT library:
-
-```js
-// Node.js (Express) example
-import jwt from 'jsonwebtoken'
-
-app.post('/auth/telegram', (req, res) => {
-  const { proof } = req.body
-  try {
-    const claims = jwt.verify(proof, process.env.BONDIFY_WEBHOOK_SECRET) // whsec_…
-    // claims = { telegram_id, telegram_name, telegram_username, project_id, ... }
-    // → create or look up the user, issue your own session cookie/JWT
-    res.json({ ok: true, telegramId: claims.telegram_id })
-  } catch {
-    res.status(401).json({ error: 'Invalid proof' })
-  }
-})
-```
-
-> Keep `BONDIFY_WEBHOOK_SECRET` on the server only. It is **not** the same as your
-> `secret_key` and must never be shipped in the app.
-
----
-
-## Platform setup
-
-`url_launcher` opens the Telegram app. On Android 11+ declare the query so the
-launch check works:
-
-**`android/app/src/main/AndroidManifest.xml`** (inside `<queries>`):
+Add the following to `android/app/src/main/AndroidManifest.xml`:
 
 ```xml
 <queries>
@@ -148,57 +102,37 @@ launch check works:
 </queries>
 ```
 
-iOS works out of the box; no extra configuration is required for `https://t.me`
-links.
+iOS requires no additional setup — the deep link is a standard `https://t.me/…`
+Universal Link, so `LSApplicationQueriesSchemes` in `Info.plist` is not needed.
 
----
+## Verifying the proof on your backend
 
-## API reference
-
-### `BondifyButton`
-
-| Property       | Type                          | Default                  | Description                                  |
-| -------------- | ----------------------------- | ------------------------ | -------------------------------------------- |
-| `projectId`    | `String?`                     | uses `BondifyClient`     | Your Project ID. Omit if you called `init()`.|
-| `onSuccess`    | `void Function(BondifyUser)`  | —                        | Called with the verified user.               |
-| `onError`      | `void Function(Object)?`      | `null`                   | Called on failure/cancel.                    |
-| `label`        | `String`                      | `'Login with Telegram'`  | Idle button text.                            |
-| `theme`        | `BondifyTheme`                | `telegram`               | `telegram` / `dark` / `light`.               |
-| `borderRadius` | `double`                      | `14`                     | Corner radius.                               |
-| `expand`       | `bool`                        | `false`                  | Full-width button.                           |
-| `apiBase`      | `String?`                     | hosted API               | Advanced / self-hosted.                      |
-
-### `BondifyUser`
-
-| Field         | Type      | Description                                       |
-| ------------- | --------- | ------------------------------------------------- |
-| `telegramId`  | `String`  | Stable numeric Telegram ID.                       |
-| `name`        | `String`  | Display name.                                     |
-| `username`    | `String?` | `@username` if set (no leading `@`).              |
-| `phone`       | `String?` | Only if your project collects phone numbers.      |
-| `proof`       | `String`  | Signed JWT — verify on your backend.              |
-| `confirmedAt` | `int`     | Confirmation time (ms since epoch).               |
-
-### `BondifyClient`
-
-- `Future<GenerateResponse> startSession()`
-- `Future<void> openTelegram(String deeplink)`
-- `Future<BondifyUser> waitForConfirmation(token, {onStatus, cancelToken})`
-- `Future<BondifyUser> authenticate({onStatus, cancelToken})` — full flow
-
----
-
-## Example
-
-A complete runnable example lives in [`example/`](example/lib/main.dart):
-
-```bash
-cd example
-flutter run
+```dart
+// After receiving user.proof — send it to your Node.js backend:
+final response = await http.post(
+  Uri.parse('https://your-api.com/auth/verify'),
+  headers: {'Content-Type': 'application/json'},
+  body: jsonEncode({'proof': user.proof}),
+);
+// Backend: bondify.verifyProof(proof) => { telegram_id, telegram_name, ... }
 ```
 
----
+## With QR code (qr_flutter)
 
-## License
+```dart
+// If qr_flutter is installed, you can render the QR yourself:
+import 'package:qr_flutter/qr_flutter.dart';
 
-MIT © Bondify
+BondifyStatusBuilder(
+  builder: (context, state) {
+    if (state.status == BondifyAuthStatus.polling && state.deeplink != null) {
+      return QrImageView(
+        data: state.deeplink!,
+        version: QrVersions.auto,
+        size: 200,
+      );
+    }
+    return BondifyButton();
+  },
+)
+```

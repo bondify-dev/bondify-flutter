@@ -1,17 +1,14 @@
 /// Bondify Flutter SDK
-/// One-tap Telegram authentication for Flutter apps.
+/// Telegram Authentication for Flutter apps
 ///
-/// Quick start:
+/// Использование:
 /// ```dart
 /// import 'package:bondify_flutter/bondify_flutter.dart';
 ///
-/// BondifyButton(
-///   projectId: 'proj_xxxxxxxx',
-///   onSuccess: (user) {
-///     // Send user.proof to YOUR backend and verify it there.
-///     debugPrint('Welcome, ${user.name}');
-///   },
-/// )
+/// void main() {
+///   BondifyClient.init(BondifyConfig(projectId: 'proj_xxxxxx'));
+///   runApp(MyApp());
+/// }
 /// ```
 library bondify_flutter;
 

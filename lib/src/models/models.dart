@@ -1,92 +1,167 @@
-// lib/src/models/models.dart
-// Data models for the Bondify Flutter SDK.
+// ============================================================
+//  bondify_flutter — Models
+//  All Dart SDK data models
+// ============================================================
 
-/// Authentication status reported while waiting for the user to confirm.
-enum BondifyStatus { pending, confirmed, expired, cancelled }
+/// SDK configuration
+class BondifyConfig {
+  /// project_id from the Bondify dashboard (required)
+  final String projectId;
 
-/// The result of a successful Telegram authentication.
-///
-/// [proof] is a signed JWT. Send it to YOUR backend and verify it there with
-/// your project's webhook secret (`whsec_…`). Never trust the client alone.
+  /// Backend base URL (default: https://api.bondify.dev)
+  final String apiUrl;
+
+  /// Polling interval (default: 1.5 s)
+  final Duration pollingInterval;
+
+  /// Session timeout (default: 10 min)
+  final Duration sessionTimeout;
+
+  const BondifyConfig({
+    required this.projectId,
+    this.apiUrl           = 'https://api.bondify.dev',
+    this.pollingInterval  = const Duration(milliseconds: 1500),
+    this.sessionTimeout   = const Duration(minutes: 10),
+  });
+}
+
+/// Authenticated user
 class BondifyUser {
-  /// The user's Telegram ID (stable, numeric, as a string).
   final String telegramId;
+  final String telegramName;
+  final String? telegramUsername;
+  final String? telegramPhone;
 
-  /// The user's display name from Telegram.
-  final String name;
-
-  /// The user's @username, if they have one (without the leading @).
-  final String? username;
-
-  /// The user's phone number, only if your project collects it (Pro+).
-  final String? phone;
-
-  /// Signed JWT to verify on your backend. Treat as a bearer credential.
+  /// JWT proof — short-lived token (5 min) for backend verification
   final String proof;
-
-  /// When the login was confirmed (ms since epoch).
-  final int confirmedAt;
+  final DateTime confirmedAt;
 
   const BondifyUser({
     required this.telegramId,
-    required this.name,
-    this.username,
-    this.phone,
+    required this.telegramName,
+    required this.telegramUsername,
+    required this.telegramPhone,
     required this.proof,
     required this.confirmedAt,
   });
 
   factory BondifyUser.fromJson(Map<String, dynamic> json) {
     return BondifyUser(
-      telegramId: (json['telegram_id'] ?? '').toString(),
-      name: (json['telegram_name'] ?? '') as String,
-      username: json['telegram_username'] as String?,
-      phone: json['telegram_phone'] as String?,
-      proof: (json['proof'] ?? '') as String,
-      confirmedAt: (json['confirmed_at'] is int)
-          ? json['confirmed_at'] as int
-          : DateTime.now().millisecondsSinceEpoch,
+      telegramId:       json['telegram_id']       as String,
+      telegramName:     json['telegram_name']      as String,
+      telegramUsername: json['telegram_username']  as String?,
+      telegramPhone:    json['telegram_phone']     as String?,
+      proof:            json['proof']              as String,
+      confirmedAt: json['confirmed_at'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(json['confirmed_at'] as int)
+          : DateTime.now(),
     );
   }
 
+  Map<String, dynamic> toJson() => {
+    'telegram_id':       telegramId,
+    'telegram_name':     telegramName,
+    'telegram_username': telegramUsername,
+    'telegram_phone':    telegramPhone,
+    'proof':             proof,
+    'confirmed_at':      confirmedAt.millisecondsSinceEpoch,
+  };
+
   @override
-  String toString() => 'BondifyUser(id: $telegramId, name: $name)';
+  String toString() =>
+      'BondifyUser(id: $telegramId, name: $telegramName, username: $telegramUsername)';
 }
 
-/// SDK configuration. Only [projectId] is required.
-class BondifyConfig {
-  /// Your Bondify Project ID (e.g. `proj_xxxxxxxx`), found in the dashboard.
-  final String projectId;
-
-  /// API base URL. Defaults to the hosted Bondify API.
-  final String apiBase;
-
-  /// How long to wait for the user to confirm before giving up.
-  final Duration sessionTimeout;
-
-  /// How often to poll the verify endpoint.
-  final Duration pollInterval;
-
-  const BondifyConfig({
-    required this.projectId,
-    this.apiBase = 'https://api.bondify.dev',
-    this.sessionTimeout = const Duration(minutes: 10),
-    this.pollInterval = const Duration(seconds: 2),
-  });
+/// Auth session status
+enum BondifyAuthStatus {
+  idle,
+  pending,
+  polling,
+  confirmed,
+  expired,
+  cancelled,
+  error,
 }
 
-/// Thrown when authentication fails (network, timeout, cancelled, expired…).
+/// SDK error codes
+enum BondifyErrorCode {
+  sessionExpired,
+  sessionCancelled,
+  networkError,
+  projectNotFound,
+  projectInactive,
+  publicAccessDisabled,
+  rateLimited,
+  pollingTimeout,
+  unknownError,
+}
+
 class BondifyException implements Exception {
+  final BondifyErrorCode code;
   final String message;
-  final BondifyStatus? status;
-  BondifyException(this.message, {this.status});
+  final dynamic details;
+
+  const BondifyException({
+    required this.code,
+    required this.message,
+    this.details,
+  });
+
   @override
-  String toString() => 'BondifyException: $message';
+  String toString() => 'BondifyException(${code.name}): $message';
 }
 
-/// A cancellation handle for an in-flight authentication.
-class BondifyCancelToken {
-  bool _cancelled = false;
-  bool get isCancelled => _cancelled;
-  void cancel() => _cancelled = true;
+/// Full auth state
+class BondifyAuthState {
+  final BondifyAuthStatus status;
+  final BondifyUser? user;
+  final BondifyException? error;
+  final String? sessionToken;
+  final String? deeplink;
+  final DateTime? expiresAt;
+
+  /// Remaining time in seconds
+  int? get secondsLeft {
+    if (expiresAt == null) return null;
+    final diff = expiresAt!.difference(DateTime.now()).inSeconds;
+    return diff < 0 ? 0 : diff;
+  }
+
+  bool get isLoading =>
+      status == BondifyAuthStatus.pending ||
+      status == BondifyAuthStatus.polling;
+
+  bool get isAuthenticated => status == BondifyAuthStatus.confirmed;
+
+  const BondifyAuthState({
+    this.status       = BondifyAuthStatus.idle,
+    this.user         = null,
+    this.error        = null,
+    this.sessionToken = null,
+    this.deeplink     = null,
+    this.expiresAt    = null,
+  });
+
+  BondifyAuthState copyWith({
+    BondifyAuthStatus?  status,
+    BondifyUser?        user,
+    BondifyException?   error,
+    String?             sessionToken,
+    String?             deeplink,
+    DateTime?           expiresAt,
+    bool                clearUser    = false,
+    bool                clearError   = false,
+    bool                clearSession = false,
+  }) {
+    return BondifyAuthState(
+      status:       status       ?? this.status,
+      user:         clearUser    ? null : (user         ?? this.user),
+      error:        clearError   ? null : (error        ?? this.error),
+      sessionToken: clearSession ? null : (sessionToken ?? this.sessionToken),
+      deeplink:     clearSession ? null : (deeplink     ?? this.deeplink),
+      expiresAt:    clearSession ? null : (expiresAt    ?? this.expiresAt),
+    );
+  }
+
+  static const initial = BondifyAuthState();
 }

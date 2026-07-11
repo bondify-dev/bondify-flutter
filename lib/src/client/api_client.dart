@@ -1,110 +1,176 @@
-// lib/src/client/api_client.dart
-// Thin HTTP client over the Bondify PUBLIC endpoints. These are safe to call
-// from a mobile app because they only require your (non-secret) Project ID.
-//
-// IMPORTANT: never embed your project's secret_key (sk_…) in a mobile app.
-// The public flow below is exactly what mobile clients should use. It requires
-// "Mobile SDK" to be enabled in your project settings.
+// ============================================================
+//  bondify_flutter — BondifyApiClient
+//  Typed HTTP client
+// ============================================================
 
-import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-
 import '../models/models.dart';
 
-/// Raw response of `POST /api/v1/generate/public`.
 class GenerateResponse {
   final String deeplink;
   final String sessionToken;
-  final int? expiresAt;
+  final DateTime expiresAt;
+
   const GenerateResponse({
     required this.deeplink,
     required this.sessionToken,
-    this.expiresAt,
+    required this.expiresAt,
   });
+
+  factory GenerateResponse.fromJson(Map<String, dynamic> json) {
+    return GenerateResponse(
+      deeplink:     json['deeplink']      as String,
+      sessionToken: json['session_token'] as String,
+      expiresAt: DateTime.fromMillisecondsSinceEpoch(json['expires_at'] as int),
+    );
+  }
 }
 
-/// Raw response of `POST /api/v1/verify/public` (pending or confirmed).
 class VerifyResponse {
-  final BondifyStatus status;
-  final BondifyUser? user;
-  const VerifyResponse({required this.status, this.user});
+  final String status;
+  final String? telegramId;
+  final String? telegramName;
+  final String? telegramUsername;
+  final String? telegramPhone;
+  final String? proof;
+  final int? confirmedAt;
+  final int? cancelledAt;
+
+  const VerifyResponse({
+    required this.status,
+    this.telegramId,
+    this.telegramName,
+    this.telegramUsername,
+    this.telegramPhone,
+    this.proof,
+    this.confirmedAt,
+    this.cancelledAt,
+  });
+
+  factory VerifyResponse.fromJson(Map<String, dynamic> json) {
+    return VerifyResponse(
+      status:           json['status']             as String,
+      telegramId:       json['telegram_id']        as String?,
+      telegramName:     json['telegram_name']      as String?,
+      telegramUsername: json['telegram_username']  as String?,
+      telegramPhone:    json['telegram_phone']     as String?,
+      proof:            json['proof']              as String?,
+      confirmedAt:      json['confirmed_at']       as int?,
+      cancelledAt:      json['cancelled_at']       as int?,
+    );
+  }
 }
 
 class BondifyApiClient {
-  final BondifyConfig config;
-  final http.Client _http;
+  final String apiUrl;
+  final String projectId;
+  final http.Client _httpClient;
 
-  BondifyApiClient(this.config, {http.Client? httpClient})
-      : _http = httpClient ?? http.Client();
+  BondifyApiClient({
+    required this.apiUrl,
+    required this.projectId,
+    http.Client? httpClient,
+  }) : _httpClient = httpClient ?? http.Client();
 
-  Uri _u(String path) => Uri.parse('${config.apiBase}$path');
-
-  /// Creates a login session and returns the Telegram deep link + token.
-  Future<GenerateResponse> generate() async {
-    final res = await _http.post(
-      _u('/api/v1/generate/public'),
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({'project_id': config.projectId}),
-    );
-
-    final body = _safeJson(res.body);
-    if (res.statusCode != 200) {
-      throw BondifyException(
-        body['error']?.toString() ?? 'Failed to start login (${res.statusCode})',
-      );
-    }
-    return GenerateResponse(
-      deeplink: body['deeplink'] as String,
-      sessionToken: body['session_token'] as String,
-      expiresAt: body['expires_at'] is int ? body['expires_at'] as int : null,
+  // ── Session generation ───────────────────────────────────────────────────
+  Future<GenerateResponse> generateSession() async {
+    return _post<GenerateResponse>(
+      path:    '/api/v1/generate/public',
+      body:    {'project_id': projectId},
+      fromJson: GenerateResponse.fromJson,
     );
   }
 
-  /// Polls the session once. Returns its current status (and user if confirmed).
-  Future<VerifyResponse> verifyOnce(String sessionToken) async {
-    final res = await _http.post(
-      _u('/api/v1/verify/public'),
-      headers: const {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'project_id': config.projectId,
+  // ── Session verification ─────────────────────────────────────────────────
+  Future<VerifyResponse> verifySession(String sessionToken) async {
+    return _post<VerifyResponse>(
+      path: '/api/v1/verify/public',
+      body: {
+        'project_id':    projectId,
         'session_token': sessionToken,
-      }),
+      },
+      fromJson: VerifyResponse.fromJson,
     );
+  }
 
-    // Non-200 during polling is treated as "keep waiting" by the caller.
-    if (res.statusCode != 200) {
-      return const VerifyResponse(status: BondifyStatus.pending);
-    }
+  // ── Private POST helper ──────────────────────────────────────────────────
+  Future<T> _post<T>({
+    required String path,
+    required Map<String, dynamic> body,
+    required T Function(Map<String, dynamic>) fromJson,
+  }) async {
+    final uri = Uri.parse('$apiUrl$path');
 
-    final body = _safeJson(res.body);
-    final status = (body['status'] ?? '').toString();
-
-    // The confirmed payload has no explicit "status" field — it returns the
-    // user object directly with a `proof`.
-    if (body.containsKey('proof')) {
-      return VerifyResponse(
-        status: BondifyStatus.confirmed,
-        user: BondifyUser.fromJson(body),
+    http.Response response;
+    try {
+      response = await _httpClient.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body:    jsonEncode(body),
+      ).timeout(const Duration(seconds: 15));
+    } catch (e) {
+      throw BondifyException(
+        code:    BondifyErrorCode.networkError,
+        message: 'Network error: $e',
+        details: e,
       );
     }
-    if (status == 'expired') {
-      return const VerifyResponse(status: BondifyStatus.expired);
-    }
-    if (status == 'cancelled') {
-      return const VerifyResponse(status: BondifyStatus.cancelled);
-    }
-    return const VerifyResponse(status: BondifyStatus.pending);
-  }
 
-  Map<String, dynamic> _safeJson(String s) {
+    Map<String, dynamic> data;
     try {
-      final v = jsonDecode(s);
-      return v is Map<String, dynamic> ? v : <String, dynamic>{};
-    } catch (_) {
-      return <String, dynamic>{};
+      data = jsonDecode(response.body) as Map<String, dynamic>;
+    } catch (e) {
+      throw BondifyException(
+        code:    BondifyErrorCode.unknownError,
+        message: 'Invalid JSON response (${response.statusCode})',
+      );
     }
+
+    if (response.statusCode != 200) {
+      throw BondifyException(
+        code:    _resolveErrorCode(data['code'] as String?, response.statusCode),
+        message: data['error']?.toString() ?? 'HTTP ${response.statusCode}',
+        details: data,
+      );
+    }
+
+    return fromJson(data);
   }
 
-  void close() => _http.close();
+  // The API returns a machine-readable `code` field in most error responses
+  // (see the REST API reference's Errors section). Several distinct failures
+  // share the same HTTP status (e.g. 403 covers both PUBLIC_ACCESS_DISABLED
+  // and PROJECT_INACTIVE), so `code` is the source of truth when present.
+  // The status-based mapping below is a fallback for responses that omit it.
+  BondifyErrorCode _resolveErrorCode(String? code, int status) {
+    final fromApi = _codeFromApiString(code);
+    return fromApi ?? _mapStatusCode(status);
+  }
+
+  BondifyErrorCode? _codeFromApiString(String? code) {
+    return switch (code) {
+      'SESSION_EXPIRED'         => BondifyErrorCode.sessionExpired,
+      'SESSION_CANCELLED'       => BondifyErrorCode.sessionCancelled,
+      'NETWORK_ERROR'           => BondifyErrorCode.networkError,
+      'PROJECT_NOT_FOUND'       => BondifyErrorCode.projectNotFound,
+      'PROJECT_INACTIVE'        => BondifyErrorCode.projectInactive,
+      'PUBLIC_ACCESS_DISABLED'  => BondifyErrorCode.publicAccessDisabled,
+      'RATE_LIMITED'            => BondifyErrorCode.rateLimited,
+      'POLLING_TIMEOUT'         => BondifyErrorCode.pollingTimeout,
+      'UNKNOWN_ERROR'           => BondifyErrorCode.unknownError,
+      _                         => null,
+    };
+  }
+
+  BondifyErrorCode _mapStatusCode(int status) {
+    return switch (status) {
+      404 => BondifyErrorCode.projectNotFound,
+      403 => BondifyErrorCode.publicAccessDisabled,
+      429 => BondifyErrorCode.rateLimited,
+      _   => BondifyErrorCode.unknownError,
+    };
+  }
+
+  void dispose() => _httpClient.close();
 }
